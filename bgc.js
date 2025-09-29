@@ -1,15 +1,34 @@
+// bgc.js
+
+// --- Express server (keeps Render alive) ---
 const express = require('express');
 const app = express();
 app.get('/', (req, res) => res.send('OK'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server listening on ${PORT}`));
 
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+// --- Discord.js setup ---
+const { 
+  Client, 
+  GatewayIntentBits, 
+  SlashCommandBuilder, 
+  EmbedBuilder, 
+  Collection, 
+  REST, 
+  Routes 
+} = require('discord.js');
 
-// If you're on Node 16, uncomment this line:
-// const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+// Create client
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
 
-module.exports = {
+// Command definition (your /bgc command)
+const bgcCommand = {
   data: new SlashCommandBuilder()
     .setName('bgc')
     .setDescription('Background check a Roblox user')
@@ -66,7 +85,6 @@ module.exports = {
       const groups            = Array.isArray(groupsJson.data) ? groupsJson.data : [];
       const totalGroups       = groups.length;
 
-      // key groups (highlight these)
       const importantGroupIds = [
         34808935, 34794384, 35250103, 35335293, 5232591,
         34899357, 34815613, 35586073, 34815619, 35678586, 35536880
@@ -75,19 +93,12 @@ module.exports = {
         .filter(g => importantGroupIds.includes(Number(g.group.id)))
         .map(g => `${g.group.name} — ${g.role?.name ?? 'Member'}`);
 
-      // blacklisted groups (flag these)
-      const blacklistedGroupIds = [35675627, 35853828]
-        /* add your blacklist IDs here, e.g.:
-        12345678,
-        87654321,
-        13579246
-        */
-    
+      const blacklistedGroupIds = [35675627, 35853828];
       const matchedBlacklisted = groups
         .filter(g => blacklistedGroupIds.includes(Number(g.group.id)))
         .map(g => `${g.group.name} — ${g.role?.name ?? 'Member'}`);
 
-      // --- Initial embed (fast feedback) ---
+      // --- Initial embed ---
       let embed = new EmbedBuilder()
         .setTitle(`${info.name} (@${info.displayName})`)
         .setThumbnail(avatarUrl)
@@ -108,7 +119,7 @@ module.exports = {
 
       await interaction.editReply({ content: '', embeds: [embed] });
 
-      // --- Fetch all badges via /badges endpoint ---
+      // --- Fetch all badges ---
       let allBadges = [];
       let cursor = '';
       do {
@@ -122,16 +133,12 @@ module.exports = {
       } while (cursor);
 
       const totalBadges = allBadges.length;
-
-      // --- Name-based detection: contains “free” OR “badge” (case-insensitive) ---
       const suspectedCount = allBadges.filter(b => {
         const lower = (b.name || '').toLowerCase();
         return lower.includes('free') || lower.includes('badge');
       }).length;
-
       const adjustedBadgeTotal = Math.max(0, totalBadges - suspectedCount);
 
-      // --- Update embed with badge fields ---
       const fields = embed.data.fields || [];
       const setField = (name, value, inline = true) => {
         const idx = fields.findIndex(f => f.name === name);
@@ -156,3 +163,44 @@ module.exports = {
     }
   }
 };
+
+// --- Command registration & handling ---
+client.commands = new Collection();
+client.commands.set(bgcCommand.data.name, bgcCommand);
+
+client.once('ready', () => {
+  console.log(`Logged in as ${client.user.tag}`);
+});
+
+// Handle interactions
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+  const command = client.commands.get(interaction.commandName);
+  if (!command) return;
+
+  try {
+    await command.execute(interaction);
+  } catch (error) {
+    console.error(error);
+    await interaction.reply({ content: '❌ There was an error executing this command.', ephemeral: true });
+  }
+});
+
+// --- Register slash command with Discord (guild-based for testing) ---
+(async () => {
+  try {
+    const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+    await rest.put(
+      Routes.applicationCommands(process.env.CLIENT_ID),
+      { body: [bgcCommand.data.toJSON()] }
+    );
+    console.log('✅ Successfully registered application commands.');
+  } catch (error) {
+    console.error('Failed to register commands:', error);
+  }
+})();
+
+// --- Login ---
+client.login(process.env.DISCORD_TOKEN).catch(err => {
+  console.error('Login failed:', err);
+});
